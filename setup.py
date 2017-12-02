@@ -5,7 +5,7 @@ setup(name='ivideon_lamp',
     version='0.1',
     description='ivideon_lamp',
     classifiers=[
-        "Programming Language :: Python",
+        "Programming Language :: Python :: 3.5",
     ],
     author='Arthur',
     author_email='',
