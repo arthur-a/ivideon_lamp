@@ -12,5 +12,10 @@ setup(name='ivideon_lamp',
     url='',
     packages=find_packages('ivideon_lamp'),
     zip_safe=False,
-    install_requires=[]
+    install_requires=[],
+    entry_points={
+        'console_scripts': [
+            'lamp_client = ivideon_lamp.lamp_client:main'
+        ]
+    },
 )

@@ -75,7 +75,10 @@ def handle_reader(reader):
             break
 
 
-def main(host, port):
+def main():
+    host = input('Enter server address (default %s): ' % HOST) or HOST
+    port = input('Enter tcp port number (default %s): ' % PORT) or PORT
+
     loop = asyncio.get_event_loop()
 
     reader, writer = loop.run_until_complete(asyncio.open_connection(
@@ -107,6 +110,4 @@ def main(host, port):
 
 
 if __name__ == '__main__':
-    host = input('Enter server address (default %s): ' % HOST) or HOST
-    port = input('Enter tcp port number (default %s): ' % PORT) or PORT
-    main(host, port)
+    main()
