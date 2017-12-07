@@ -1,6 +1,4 @@
-import binascii
 import asyncio
-import struct
 
 from ivideon_lamp.management import get_commands
 
@@ -9,9 +7,7 @@ PORT = 9999
 
 TYPE_SIZE = 1
 LENGTH_SIZE = 2
-MIN_LENGTH = TYPE_SIZE + LENGTH_SIZE
-
-MAX_ATTEMPTS = 3
+HEADER_LENGTH = TYPE_SIZE + LENGTH_SIZE
 
 
 def do_command(type, value=None):
@@ -19,60 +15,107 @@ def do_command(type, value=None):
         if cls.type == type:
             print('New command from server')
             cmd = cls(value)
-            cmd.run() 
+            cmd.run()
 
 
-@asyncio.coroutine
-def handle_reader(reader):
-    buffer = b''
-    parse_value = False
-    type = None
-    length = None
-    value = None
+class Client:
+    # modes
+    parse_header = 1
+    parse_value = 2
 
-    while True:
-        buffer += yield from reader.read(100)
+    def __init__(self, loop, host, port, timeout=1, max_attempts=5):
+        self.loop = loop
+        self.host = host
+        self.port = port
+        self._reader = None
+        self._writer = None
+        self._attemps = 0
+        self.timeout = timeout
+        self.max_attempts = max_attempts
 
-        while True:
-            if not parse_value and len(buffer) >= MIN_LENGTH:
-                data = buffer[:MIN_LENGTH]
-                buffer = buffer[MIN_LENGTH:]
-                
+    @asyncio.coroutine
+    def open_connection(self, is_reconnect=False):
+        self._reader = None
+        self._writer = None
+
+        if is_reconnect:
+            while (self.max_attempts == 0 or self._attemps < self.max_attempts):
+                self._attemps += 1
+
+                print('Trying to reconnect to %s:%s' % (self.host, self.port))
+                yield from asyncio.sleep(self.timeout)
+
                 try:
-                    type, length = struct.unpack('>cH', data)
-                except (struct.error, TypeError):
+                    self._reader, self._writer = yield from asyncio.open_connection(
+                        self.host, self.port, loop=self.loop)
+                except ConnectionRefusedError:
+                    pass
+                else:
+                    print('Connected to %s:%s' % (self.host, self.port))
+                    break
+        else:
+            # Don't catch exceptions for first connection,
+            # let's show it on console.
+            self._reader, self._writer = yield from asyncio.open_connection(
+                self.host, self.port, loop=self.loop)
+            print('Connected to %s:%s' % (self.host, self.port))
+
+    @asyncio.coroutine
+    def parse(self):
+        """Parse the body.
+        Stops work only if the EOF was received."""
+        buffer = b''
+        parse_value = False
+        type = None
+        length = None
+        value = None
+        mode = self.parse_header
+
+        while not self._reader.at_eof():
+            if mode == self.parse_header:
+                buffer += yield from self._reader.read(HEADER_LENGTH)
+                if len(buffer) < HEADER_LENGTH:
                     continue
 
-                type = int(binascii.hexlify(type), 16)
+                data = buffer[:HEADER_LENGTH]
+                type, length = data[0], data[1:]
+                buffer = buffer[HEADER_LENGTH:]
                 
+                length = int.from_bytes(length, 'big')
                 if length:
-                    parse_value = True
+                    mode = self.parse_value
                 else:
                     do_command(type)
                     type = None
                     length = None
-            elif parse_value and len(buffer) >= length:
-                parse_value = False
-                data = buffer[:length]
+            elif mode == self.parse_value:
+                buffer += yield from self._reader.read(length)
+                if len(buffer) < length:
+                    continue
+
+                value = buffer[:length]
                 buffer = buffer[length:]
 
-                try:
-                    value = struct.unpack('>%is' % length, data)[0]
-                except (struct.error, TypeError):
-                    value = b''
-
-                if value != b'':
-                    value = int(binascii.hexlify(value), 16)            
-                    do_command(type, value)
+                value = int.from_bytes(value, 'big')
+                do_command(type, value)
         
                 type = None
                 length = None
                 value = None
+                mode = self.parse_header
             else:
                 break
 
-        if reader.at_eof():
-            break
+    def close(self):
+        if self._writer is not None:
+            self._writer.close()
+
+    @asyncio.coroutine
+    def run(self):
+        yield from self.open_connection()
+        while (self._reader is not None and self._writer is not None):
+            yield from self.parse()
+            yield from self.open_connection(True)
 
 
 def main():
@@ -80,32 +123,11 @@ def main():
     port = input('Enter tcp port number (default %s): ' % PORT) or PORT
 
     loop = asyncio.get_event_loop()
-
-    reader, writer = loop.run_until_complete(asyncio.open_connection(
-        host, port, loop=loop))
-    print('Connected to %s:%s' % (host, port))
-
-    attemps = 0
-    while True:
-        try:
-            loop.run_until_complete(handle_reader(reader))
-        except KeyboardInterrupt:
-            writer.close()
-            break
-
-        loop.run_until_complete(asyncio.sleep(2))
-
-        print('Trying to reconnect to %s:%s' % (host, port))
-        attemps += 1
-        try:
-            reader, writer = loop.run_until_complete(asyncio.open_connection(
-                host, port, loop=loop))
-        except ConnectionRefusedError:
-            pass
-
-        if attemps == MAX_ATTEMPTS:
-            break
-    
+    client = Client(loop, host, port)
+    try:
+        loop.run_until_complete(client.run())
+    except KeyboardInterrupt:
+        client.close()
     loop.close()
 
 
